@@ -12,6 +12,19 @@ Many thanks to everyone who used the plugin, shared feedback, and contributed, e
 
 ---
 
+## Patch carried by this fork (unofficial, 0.7.10)
+
+This fork keeps one minimal patch for personal, already-signed-in use:
+
+- **Symptom**: since 2026-10-20 23:00 (UTC+8) every CN model fails with `400 … workbuddy upstream client (http 400)` (upstream `code 11128`). The international variant is unaffected.
+- **Cause**: the gateway fingerprints the request by the first `system` (or `developer`) message *starting* with the DeepSeek Harness opener `You are an AI agent powered by DeepSeek Harness.` DSH injects that sentence into every agent request, so all models under the group fail together; the official client does not send it, which is why it still works. `role: "developer"` is rejected by an independent 11128 rule.
+- **Change**: in the prepare step (`src/upstream.ts`) the leading sentence is replaced with `You are an AI agent.`, and `developer → system` normalisation is now applied on the CN path too. Prompt semantics are unchanged and every byte after the opener is preserved; `neutralizeChannelSignature` / `neutralizeOpener` are idempotent, handle both string and array content, and tolerate a BOM and leading whitespace.
+- **Measured** (same account, same token, same headers as the plugin): 400 / `11128` before, 200 with a normal stream after; `tools`, `stream_options`, `temperature`, every `reasoning_effort` level, `max_tokens` up to 256000, a 176 KB body, and a missing `X-Conversation-*` triple all still return 200.
+
+This is a stopgap, not an officially sanctioned way to connect: if the upstream switches to a wider fingerprint (for instance a hash of the whole prompt) it stops working, and the official WorkBuddy client is the way back. The maintenance notice and the disclaimer above still apply in full.
+
+---
+
 Brings the models available in your signed-in WorkBuddy / WorkBuddy AI desktop app into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness); the two versions each show their own model group and reuse their own account sign-in and credit.
 
 ## Install

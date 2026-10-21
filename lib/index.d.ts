@@ -449,7 +449,8 @@ declare function regionOf(domain: string): WorkBuddyRegion;
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * rewrite `developer` messages as `system`, and neutralise the channel
+ * fingerprint on the opener (see {@link HARNESS_OPENER}).
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
@@ -686,8 +687,13 @@ declare function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now?: 
  *
  * Deliberately **not** routed through {@link prepareChatBody}: the shim already
  * applies it before handing the body to {@link WorkBuddyUpstreamClient.chatStream},
- * and re-running it would be a second `stream`/`developer`/`tool_choice`
- * normalisation of an already-normalised body. Only the strip belongs here.
+ * so `stream` is already forced and `tool_choice` already flattened. The two
+ * normalisations that are *not* cosmetic — {@link normalizeDeveloperRole} and
+ * {@link neutralizeChannelSignature} — still run here, because both turn a
+ * guaranteed 400 (code 11128) into an accepted request and both are idempotent.
+ * The shim is not the only caller of `chatStream` (the probe and the direct
+ * protocol path build their own bodies), and a body the shim never saw must not
+ * be met with a channel rejection.
  *
  * A body that is not a JSON object is returned unchanged, so this is safe to
  * run over an already-prepared-or-not body.

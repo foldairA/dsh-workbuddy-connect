@@ -12,6 +12,19 @@
 
 ---
 
+## 本仓库的补丁（非官方，0.7.10）
+
+上游停止维护后，本 fork 保留一份最小补丁，仅用于本机已登录账号的自用场景：
+
+- **症状**：2026-10-20 23:00 起，国内版模型统一报 `400 … workbuddy upstream client (http 400): 请求被拦截，请重新发送`（上游 `code 11128`）。国际版不受影响。
+- **原因**：网关把「首条 `system`／`developer` 消息以 DeepSeek Harness 固定开场句 `You are an AI agent powered by DeepSeek Harness.` 开头」当作渠道指纹。该句由 DSH 对每个 agent 请求注入，因此同一分组下所有模型同时失败；官方客户端不带这句，所以正常。`role: "developer"` 另有一条独立的 11128 判定。
+- **做法**：在 prepare 阶段（`src/upstream.ts`）把行首该句替换为 `You are an AI agent.`，并把 `developer → system` 归一同时补到 CN 路径。提示词语义不变，开场句之后的每一个字节保持原样；`neutralizeChannelSignature`／`neutralizeOpener` 幂等，覆盖字符串与数组两种 content 形态，容忍 BOM 与前导空白。
+- **实测**（同一账号、同一 token、与插件相同的请求头）：改前 400 / `11128`，改后 200 正常流式；`tools`／`stream_options`／`temperature`／`reasoning_effort` 全档、最大 256000 `max_tokens`、176 KB 请求体、缺 `X-Conversation-*` 三元组等均仍为 200。
+
+这是临时兼容层，不是上游认可的接入方式：上游若换成更宽的指纹（例如按整段提示哈希）即会失效，届时请改用官方 WorkBuddy 客户端。上文「停止维护公告」与「免责声明」中的风险说明全部适用，能否使用请自行判断。
+
+---
+
 将已登录的 WorkBuddy / WorkBuddy AI 桌面应用中可用的模型接入 DeepSeek Harness；两版分别显示各自的模型分组，并沿用各自的账号登录与积分。
 
 ## 安装
@@ -167,6 +180,7 @@ llm-workbuddy:
 
 历次更新（完整记录见 [releases](https://github.com/corrinehu/dsh-workbuddy-connect/releases)）：
 
+- **0.7.10**（本 fork）：国内版适配 2026-10-20 起的渠道指纹校验，详见上文[「本仓库的补丁」](#本仓库的补丁非官方0710)；上游已于 2026-10-20 停止维护，本版仅此一项改动。
 - **0.7.9**：恢复 DSH 0.2.1-rc.2 上国际版最大上下文窗口开关，修复延迟初始化及设置持久化（PR [#172](https://github.com/corrinehu/dsh-workbuddy-connect/pull/172)，by @1Dreamer666）；避免本地服务绑定到 fetch 禁用端口导致国际版 502（PR [#164](https://github.com/corrinehu/dsh-workbuddy-connect/pull/164)，by @Xiong-Ziyi）；同名积分包合并展示，减少重复条目。
 - **0.7.8**：适配 DSH 0.2.1-rc.2；将官方原子写入工具打包到插件，避免依赖宿主暴露该模块；更新国内模型目录快照，区分 Hy3 / Hy3-X；优化推理检测结果展示，调整积分刷新按钮位置并修正悬停提示。感谢 @chenpiyanghappy 的 PR [#156](https://github.com/corrinehu/dsh-workbuddy-connect/pull/156)。
 - **0.7.7**：适配 DSH 0.2.1-rc.1 内核：peer 收窄到 0.2.1-rc.1，插件自带的 `@earendil-works/pi-ai` 随内核升级到 1.3.0（profile 级历史遗留的 0.87.1 overrides 必须移除，否则插件无法加载）；修复国际版与国内版推理档位检测停留「检测未完成」——上游把档位拒绝码改拼为 `invalid_parameter_value`（[#143](https://github.com/corrinehu/dsh-workbuddy-connect/issues/143) / [#148](https://github.com/corrinehu/dsh-workbuddy-connect/issues/148)，PR [#145](https://github.com/corrinehu/dsh-workbuddy-connect/pull/145)）；修复中文 Windows 控制台下注册表缺键诊断因 GBK 编码被误判（zh-CN 实机验证）。

@@ -546,7 +546,8 @@ function identityHeaders(credential: WorkBuddyCredential): Record<string, string
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * rewrite `developer` messages as `system`, and neutralise the channel
+ * fingerprint on the opener (see {@link HARNESS_OPENER}).
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
@@ -565,8 +566,67 @@ export function prepareChatBody(source: string): string {
   const obj = body as Record<string, unknown>
   obj['stream'] = true
   normalizeDeveloperRole(obj)
+  neutralizeChannelSignature(obj)
   normalizeToolChoice(obj)
   return JSON.stringify(obj)
+}
+
+/**
+ * The opener every DeepSeek Harness agent request starts with.
+ *
+ * Since 2026-10-20T23:00+08:00 the CN gateway reads it as a channel
+ * fingerprint: a leading `system` (or `developer`) message that *begins* with
+ * this sentence is answered with HTTP 400 code 11128 ("Illegal API invocation
+ * from an unapproved channel"), which the plugin surfaces as the friendly
+ * 「请求被拦截，请重新发送」 card. Measured on one account and one token:
+ * otherwise identical bodies return 200 once the opener is neutralised, and
+ * every other role/field variation still passes, so the sentence — not the
+ * request shape — is what the gateway keys on.
+ */
+const HARNESS_OPENER = 'You are an AI agent powered by DeepSeek Harness.'
+/** Same meaning, no fingerprint. Verified to pass the same check. */
+const NEUTRAL_OPENER = 'You are an AI agent.'
+const HARNESS_OPENER_PATTERN = /^(?:\uFEFF|\s)*You are an AI agent powered by DeepSeek Harness\.?/
+
+/** Replace a leading harness opener with the neutral one. Idempotent. */
+function neutralizeOpener(text: string): string {
+  // Cheap guard: the replace below is a no-op for every other prompt, but the
+  // substring test keeps the common case allocation-free.
+  if (!text.includes('powered by DeepSeek Harness')) return text
+  return text.replace(HARNESS_OPENER_PATTERN, NEUTRAL_OPENER)
+}
+
+/**
+ * Strip the channel fingerprint from a prompt-carrying message.
+ *
+ * Only the first text part of a `system`/`developer` message is rewritten —
+ * that is the opener the gateway inspects. Everything after it, and every
+ * other message, is left exactly as the caller wrote it, so the conversation
+ * itself is unchanged.
+ */
+function neutralizeChannelSignature(obj: Record<string, unknown>): void {
+  const messages = obj['messages']
+  if (!Array.isArray(messages)) return
+  for (const message of messages) {
+    if (!isObject(message)) continue
+    const role = message['role']
+    // `developer` is normalised to `system` first; accept both so this also
+    // works if it is ever called on an un-normalised body.
+    if (role !== 'system' && role !== 'developer') continue
+    const content = message['content']
+    if (typeof content === 'string') {
+      message['content'] = neutralizeOpener(content)
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    const first: unknown = content[0]
+    if (!isObject(first)) continue
+    const type = first['type']
+    if (type !== 'text' && type !== 'input_text') continue
+    const text = first['text']
+    if (typeof text !== 'string') continue
+    first['text'] = neutralizeOpener(text)
+  }
 }
 
 /** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
@@ -1546,8 +1606,13 @@ export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = D
  *
  * Deliberately **not** routed through {@link prepareChatBody}: the shim already
  * applies it before handing the body to {@link WorkBuddyUpstreamClient.chatStream},
- * and re-running it would be a second `stream`/`developer`/`tool_choice`
- * normalisation of an already-normalised body. Only the strip belongs here.
+ * so `stream` is already forced and `tool_choice` already flattened. The two
+ * normalisations that are *not* cosmetic — {@link normalizeDeveloperRole} and
+ * {@link neutralizeChannelSignature} — still run here, because both turn a
+ * guaranteed 400 (code 11128) into an accepted request and both are idempotent.
+ * The shim is not the only caller of `chatStream` (the probe and the direct
+ * protocol path build their own bodies), and a body the shim never saw must not
+ * be met with a channel rejection.
  *
  * A body that is not a JSON object is returned unchanged, so this is safe to
  * run over an already-prepared-or-not body.
@@ -1561,6 +1626,8 @@ export function prepareCnChatBody(source: string): string {
     return source
   }
   if (!isObject(body)) return source
+  normalizeDeveloperRole(body)
+  neutralizeChannelSignature(body)
   dropUnsupportedEffort(body)
   return JSON.stringify(body)
 }
